@@ -6,7 +6,7 @@
 
 validate-charts:
   image:
-    name: docker.io/alpine/helm:3.16.3
+    name: docker.io/alpine/helm:3.16.3@sha256:ed9dfc49d43d034df3f9880eb777caf0183e5156508672478b80412c63f3db4f
     entrypoint: [""]
   script:
     - helm lint charts/openfire
@@ -72,7 +72,7 @@ validate-charts:
 # first boot AFTER poisoning the conf PVC. Parse it here instead.
 validate-conf-xml:
   image:
-    name: docker.io/python:3.12-alpine
+    name: docker.io/python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
   script:
     - apk add --no-cache helm
     - pip install --no-cache-dir --quiet pyyaml
@@ -112,30 +112,54 @@ validate-conf-xml:
 publish-chart:
   needs: [validate-charts, validate-conf-xml]
   image:
-    name: docker.io/alpine/helm:3.16.3
+    # Digest-pinned: this job holds registry push credentials -- a mutable
+    # image tag here is the trivy-action-hijack risk class.
+    name: docker.io/alpine/helm:3.16.3@sha256:ed9dfc49d43d034df3f9880eb777caf0183e5156508672478b80412c63f3db4f
     entrypoint: [""]
+  variables:
+    # Registry location is data: migrating charts to a Nexus later = change
+    # these two values (and point QUAY_USERNAME/QUAY_PASSWORD at the Nexus
+    # credentials). helm push/pull are plain OCI, registry-agnostic.
+    CHART_REGISTRY: "quay.io"
+    CHART_NAMESPACE: "mikailkose"
   script:
     - |
       set -euo pipefail
       : "${QUAY_USERNAME:?QUAY_USERNAME is not set - add it under Settings > CI/CD > Variables}"
       : "${QUAY_PASSWORD:?QUAY_PASSWORD is not set - add it under Settings > CI/CD > Variables (masked)}"
       VERSION=$(sed -n 's/^version: *//p' charts/openfire/Chart.yaml)
-      echo "${QUAY_PASSWORD}" | helm registry login quay.io -u "${QUAY_USERNAME}" --password-stdin
-      # Bundle the environment presets so the artifact is self-contained
+      echo "${QUAY_PASSWORD}" | helm registry login "${CHART_REGISTRY}" -u "${QUAY_USERNAME}" --password-stdin
+      # Bundle the environment presets so the artifact is self-contained.
+      # envs/ IS chart content: every change there (incl. a digest promotion
+      # in envs/prod.yaml) needs a chart version bump to publish.
       cp -r envs charts/openfire/envs
       helm package charts/openfire
       # Immutability + drift guard: an existing version is never overwritten.
       # Identical content -> quiet skip (docs-only push). Different content ->
-      # someone changed the chart without bumping the version: FAIL.
-      if helm pull "oci://quay.io/mikailkose/openfire" --version "${VERSION}" --untar --untardir /tmp/published > /dev/null 2>&1; then
+      # version bump forgotten: FAIL. Any pull error other than not-found
+      # also FAILS -- a transient registry error must never allow a blind
+      # push over a published version.
+      if OUT=$(helm pull "oci://${CHART_REGISTRY}/${CHART_NAMESPACE}/openfire" --version "${VERSION}" --untar --untardir /tmp/published 2>&1); then
         mkdir -p /tmp/local && tar xzf "openfire-${VERSION}.tgz" -C /tmp/local
         if diff -r /tmp/published/openfire /tmp/local/openfire; then
           echo "Chart ${VERSION} already published and identical -- nothing to do."
           exit 0
         fi
-        echo "ERROR: chart content changed but version ${VERSION} is already published -- bump version in charts/openfire/Chart.yaml."
+        echo "ERROR: chart content (incl. envs/) changed but ${VERSION} is already published -- bump version in charts/openfire/Chart.yaml (every promotion commit needs one)."
+        exit 1
+      elif echo "${OUT}" | grep -qiE 'not found|404|manifest unknown'; then
+        helm push "openfire-${VERSION}.tgz" "oci://${CHART_REGISTRY}/${CHART_NAMESPACE}"
+      else
+        echo "${OUT}"
+        echo "ERROR: could not verify whether ${VERSION} is already published -- refusing to push blind. Retry the job."
         exit 1
       fi
-      helm push "openfire-${VERSION}.tgz" oci://quay.io/mikailkose
+  artifacts:
+    # Packaged chart downloadable from the job's Artifacts browser -- kept on
+    # failure too, for debugging.
+    when: always
+    paths:
+      - openfire-*.tgz
+    expire_in: 30 days
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

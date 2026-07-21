@@ -14,7 +14,7 @@ commit / change ticket — operators execute, maintainers decide).
 ### 1. Pull
 
 ```bash
-helm pull oci://quay.io/mikailkose/openfire --version 0.12.0 --untar
+helm pull oci://quay.io/mikailkose/openfire --version 0.13.0 --untar
 ```
 
 ### 2. Apply
@@ -47,7 +47,8 @@ oc logs deployment/prod-openfire -n openfire-prod --tail=50   # clean startup?
 
 **Rollback** = the same 3 steps with the previous version number — published
 chart versions are immutable and stay pullable. **Which versions exist:**
-`helm show chart oci://quay.io/mikailkose/openfire` (or the Quay UI).
+`skopeo list-tags docker://quay.io/mikailkose/openfire` (or the Quay UI);
+`helm show chart oci://quay.io/mikailkose/openfire` shows the newest.
 
 ## What changed → how to roll it out
 
@@ -82,7 +83,7 @@ full validation matrix before merge), releases are tags/versions —
   tested in dev is byte-identical in prod.
 - **dev floats, preprod/prod pin.** dev runs the moving `main` image tag (the
   oci CI updates it on every branch build; refresh =
-  `oc rollout restart deployment/dev-openfire`). **preprod/prod pin the image
+  `oc rollout restart deployment/dev-openfire -n openfire-dev`). **preprod/prod pin the image
   DIGEST** (`image.digest` in `envs/*.yaml` — UBI model: tags roll, digests
   pin; the digest comes from the oci build job's log). One commit per
   promotion is the audit trail — and `git revert` of that commit is the
@@ -166,8 +167,8 @@ image or chart. (See [openfire-authprovider › local-dev](https://gitlab.com/mk
 ### 2. Release a new auth provider
 
 ```bash
-# bump <version> in pom.xml (e.g. 0.1.3 -> 0.1.4), commit
-git tag v0.1.4 && git push origin main v0.1.4     # -> GitLab package registry
+# bump <version> in pom.xml (e.g. 0.2.0 -> 0.2.1), commit
+git tag v0.2.1 && git push origin main v0.2.1     # -> GitLab package registry
 ```
 
 Grab the published JAR's sha256:
@@ -233,7 +234,7 @@ environment presets bundled — the same registry the cluster pulls the image
 from. A machine with only `helm`, `oc` and Quay access rolls out with:
 
 ```bash
-helm pull oci://quay.io/mikailkose/openfire --version 0.11.0 --untar
+helm pull oci://quay.io/mikailkose/openfire --version 0.13.0 --untar
 helm template prod openfire \
   -f openfire/values-openshift.yaml \
   -f openfire/envs/prod.yaml -f openfire/envs/sizes/30k.yaml | oc apply -f -
@@ -241,8 +242,9 @@ oc rollout status deployment/prod-openfire -n openfire-prod
 ```
 
 Published chart versions are **immutable** — a rollback is a `helm pull` of the
-previous version with the same commands. Which version is current:
-`helm show chart oci://quay.io/mikailkose/openfire` (or the Quay UI).
+previous version with the same commands. Newest version:
+`helm show chart oci://quay.io/mikailkose/openfire`; all versions:
+`skopeo list-tags docker://quay.io/mikailkose/openfire` (or the Quay UI).
 Publishing to a Nexus later is the same mechanism — charts are plain OCI
 artifacts, only the URL changes.
 

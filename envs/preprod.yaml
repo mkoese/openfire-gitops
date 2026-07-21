@@ -9,7 +9,7 @@
 namespace:
   name: openfire-preprod
 
-# Pinned image -- the tag promoted from dev; prod gets this exact tag after soak.
+# Pinned image digest -- promoted from dev; prod gets this exact digest after soak.
 image:
   tag: "5.1.1"   # informational -- the digest below is what deploys
   digest: sha256:3f02cf00e5ac4c1f715122e464f3f30cc9654109f87ad9f86733125f1b389c20

@@ -6,10 +6,10 @@ Run top to bottom — each layer depends on the previous one. Command reference:
 
 ## 1. Pod healthy
 
-- [ ] `oc rollout status deployment/<release>-openfire -n openfire` — Ready
-- [ ] `oc logs deployment/<release>-openfire -n openfire -c init-conf` — conf
+- [ ] `oc rollout status deployment/<release>-openfire -n <namespace>` — Ready
+- [ ] `oc logs deployment/<release>-openfire -n <namespace> -c init-conf` — conf
       seeded, keystore built, no errors
-- [ ] `oc logs deployment/<release>-openfire -n openfire | grep -i error` — triage
+- [ ] `oc logs deployment/<release>-openfire -n <namespace> | grep -i error` — triage
       anything that shows up
 
 ## 2. DNS

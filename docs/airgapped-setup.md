@@ -13,13 +13,16 @@ works offline. Only the *deployed* reference must resolve inside the cluster:
 
 | Reference | Where it's set | Airgapped value |
 |-----------|----------------|-----------------|
-| Openfire image | `image.repository` / `image.tag` | internal registry path |
+| Openfire image | `image.repository` + `image.digest` (preprod/prod) or `image.tag` (dev) | internal registry path |
 
 ## 1. Mirror the image into the internal registry
 
 ```bash
-skopeo copy docker://quay.io/mikailkose/openfire-oci:5.1.1 \
+# copy by DIGEST -- the digest pinned in envs/*.yaml must exist internally;
+# tags roll and may already point elsewhere
+skopeo copy docker://quay.io/mikailkose/openfire-oci@sha256:<pinned-digest> \
   docker://registry.internal/openfire/openfire-oci:5.1.1
+# then set the internal digest: skopeo inspect --format '{{.Digest}}' docker://registry.internal/openfire/openfire-oci:5.1.1
 ```
 
 Point the chart at them:
@@ -38,7 +41,8 @@ image:
 helm template prod ./charts/openfire \
   -f ./charts/openfire/values-openshift.yaml \
   -f envs/prod.yaml -f envs/sizes/30k.yaml \
-  --set image.repository=registry.internal/openfire/openfire-oci | oc apply -f -
+  --set image.repository=registry.internal/openfire/openfire-oci \
+  --set image.digest=sha256:<internal-digest> | oc apply -f -
 ```
 
 Create the runtime secrets (DB, LDAP, admin, keystore, keytab) from internal

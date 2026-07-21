@@ -9,8 +9,8 @@
 namespace:
   name: openfire-prod
 
-# Pinned image -- promotion = copying the exact tag soaked in preprod.
-# Never a moving tag (main/latest) here.
+# Pinned image digest -- promotion = copying the exact digest soaked in preprod.
+# Never a moving tag (main/latest) here; the digest wins over the tag.
 image:
   tag: "5.1.1"   # informational -- the digest below is what deploys
   digest: sha256:3f02cf00e5ac4c1f715122e464f3f30cc9654109f87ad9f86733125f1b389c20

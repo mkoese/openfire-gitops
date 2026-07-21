@@ -23,8 +23,8 @@ that the adminPassword / kerberos-requires-auth guards fail when they should):
 ```bash
 # embedded DB, default auth
 helm template t charts/openfire >/dev/null
-# external PostgreSQL
-helm template t charts/openfire --set database.host=pg --set database.existingSecret=pg >/dev/null
+# external PostgreSQL (adminPasswordSecret required by the guard)
+helm template t charts/openfire --set database.host=pg --set database.existingSecret=pg --set adminPasswordSecret=adm >/dev/null
 # full stack: PG + AD auth + Kerberos (adminPasswordSecret required by the guard)
 helm template t charts/openfire \
   --set database.host=pg --set database.existingSecret=pg \

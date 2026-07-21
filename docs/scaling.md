@@ -55,7 +55,7 @@ Single-node limits with this config, in the order you'd hit them:
 | # | Limit | Kicks in around | Symptom | Lever |
 |---|-------|-----------------|---------|-------|
 | 1 | Reconnect-storm duration | >30k concurrent | after a restart, minutes of 100% CPU while TLS handshakes drain | more CPU request, or accept a longer blip |
-| 2 | Heap | ~50–60k sessions (at 6Gi heap, ~100KB each) | GC pressure, rising latency, eventually `ExitOnOutOfMemoryError` | bigger limit (12–16Gi) buys a bit more |
+| 2 | Heap | ~48k sessions (4.8Gi heap at the 30k tier, ~100KB each) | GC pressure, rising latency, eventually `ExitOnOutOfMemoryError` | bigger limit (12–16Gi ⇒ 7–9.6Gi heap) buys more |
 | 3 | DB pool / PostgreSQL | login storms > ~1k logins/s | slow logins after restarts | pool + PG sizing |
 | 4 | Single-JVM practicality | **~50k concurrent** | GC pauses + restart blast radius stop being a "blip" | **this is the Path B line — Hazelcast clustering, no more single-node tuning** |
 

@@ -14,7 +14,7 @@ xmpp:
 # Dev floats on the newest main build: 'main' is a moving alias the oci CI
 # updates on every non-release build. Refresh with:
 #   oc rollout restart deployment/dev-openfire -n openfire-dev
-# Preprod/prod pin exact tags instead (promotion = copying a tested tag).
+# Preprod/prod pin the image digest instead (promotion = copying a tested digest).
 image:
   tag: main
   pullPolicy: Always

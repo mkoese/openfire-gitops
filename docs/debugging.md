@@ -30,7 +30,7 @@ oc logs deployment/<release>-openfire -n openfire --previous     # after a crash
 | Pod `Pending` | `describe pod` events | PVC unbound (no storage class) or anti-scheduling; check `persistence.storageClassName` |
 | Init container `Error`/`CrashLoop` | `logs -c init-conf` | missing referenced secret (`database.existingSecret`, `auth.ldap.existingSecret`, `adminPasswordSecret`, `kerberos.keytabSecret`); create it or unset the value |
 | Main container `CrashLoopBackOff` | `logs --previous` | DB unreachable, bad JDBC URL, or a schema error — check `database.host`/NetworkPolicy egress |
-| Startup probe never succeeds | `describe pod` | admin console slow to come up; raise `startupProbe.failureThreshold` |
+| Startup probe never succeeds | `describe pod` | admin console slow to come up; raise the startup probe `failureThreshold` in `templates/deployment.yaml` (not a values key) |
 | `readOnlyRootFilesystem` → write errors | main logs | a write path isn't a mounted volume; disable `security.readOnlyRootFilesystem` and report the path |
 | Auth: everyone rejected | main logs (enable auth debug) | LDAP unreachable (fail-closed), wrong `baseDN`/`usernameField`, or bad service-account bind |
 | Kerberos/GSSAPI fails | main logs (`sasl.gssapi.debug`) | SPN ≠ `xmpp/<fqdn>@REALM`, keytab enctype mismatch, clock skew > 5 min |
@@ -70,7 +70,7 @@ oc exec deployment/<release>-openfire -n openfire -- \
 oc exec deployment/<release>-openfire -n openfire -- curl -sf http://localhost:9090/login.jsp
 oc get networkpolicy -n openfire                                 # egress to DB/LDAP/KDC allowed?
 oc exec deployment/<release>-openfire -n openfire -- \
-  sh -c 'nc -zv <db-host> 5432'                                  # DB reachability
+  bash -c 'timeout 3 bash -c "</dev/tcp/<db-host>/5432" && echo open'  # DB reachability (no nc in the image)
 ```
 
 ## Data / reset

@@ -88,8 +88,9 @@ itself:
 - **Per-env identity** — each environment has its own `xmpp.fqdn`
   (`chat-dev.…`, `chat-preprod.…`, `chat.…`), which means its own certificate
   and, for Kerberos, its **own SPN + keytab** (the SPN embeds the fqdn).
-- **Per-env image tags** — dev can track a CI rebuild tag
-  (`5.1.1-<build>`), prod pins the release tag; that's the promotion flow.
+- **Per-env image pinning** — dev floats on the rolling `main` tag
+  (pullPolicy `Always`); preprod/prod pin `image.digest`. Promotion = copying
+  a tested digest between env files (see [docs/upgrading.md](docs/upgrading.md)).
 - **Spread across nodes** — built-in pod anti-affinity on the shared app label
   (all namespaces): the scheduler always tries a node without a running
   openfire first, so the environments land on different nodes.
@@ -277,7 +278,11 @@ helm template openfire charts/openfire -f charts/openfire/values-openshift.yaml 
 
 `.gitlab-ci.yml` runs `helm lint` + a `helm template` matrix (embedded/external DB,
 AD auth, Kerberos, TLS + extra keypairs, bring-your-own conf secret) on every
-push/MR — catching template regressions before they reach a cluster.
+push/MR — catching template regressions before they reach a cluster. On `main`
+the `publish-chart` job additionally publishes the chart (env presets bundled)
+as an OCI artifact to `oci://quay.io/mikailkose/openfire`, guarded against
+content drift without a version bump — see
+[docs/upgrading.md](docs/upgrading.md#operator-runbook--rollout-in-3-steps).
 
 The **image itself** is built and pushed by the openfire-oci CI
 (GitLab pipeline / GitHub workflow) — see
