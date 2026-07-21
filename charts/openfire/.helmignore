@@ -1,0 +1,36 @@
+# Build artifacts
+*.tar.gz
+*.tar
+
+# Secrets (not templates/secret-conf.yaml and secret-keystore.yaml which are part of the chart)
+
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Java
+*.class
+*.log
+hs_err_pid*
+
+# Logs
+logs/
+
+# Temp files and folders
+tmp/
+temp/
+*.tmp
+*.bak
+*~
+
+# Git
+.git/
+.gitignore

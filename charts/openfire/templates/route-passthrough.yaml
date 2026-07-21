@@ -1,0 +1,41 @@
+{{- if .Values.routes.adminSsl.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Release.Name }}-openfire-admin-ssl
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.routes.adminSsl.host }}
+  host: {{ .Values.routes.adminSsl.host }}
+  {{- end }}
+  port:
+    targetPort: admin-ssl
+  to:
+    kind: Service
+    name: {{ .Release.Name }}-openfire
+  tls:
+    termination: passthrough
+{{- end }}
+{{- if .Values.routes.boshSsl.enabled }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Release.Name }}-openfire-bosh-ssl
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.routes.boshSsl.host }}
+  host: {{ .Values.routes.boshSsl.host }}
+  {{- end }}
+  port:
+    targetPort: bosh-ssl
+  to:
+    kind: Service
+    name: {{ .Release.Name }}-openfire
+  tls:
+    termination: passthrough
+{{- end }}

@@ -1,0 +1,47 @@
+{{- if and .Values.kerberos.enabled (not .Values.auth.enabled) }}
+{{- fail "kerberos.enabled requires auth.enabled=true (GSSAPI is only offered through the AD-gated auth config in secret-conf.yaml)" }}
+{{- end }}
+{{- if .Values.kerberos.enabled }}
+{{/*
+  Kerberos client config + JAAS acceptor config for SASL GSSAPI.
+  Mounted (together with the keytab secret) at /opt/openfire/kerberos.
+  The SPN must be xmpp/<fqdn>@REALM and <fqdn> must match what clients
+  resolve -- Openfire builds the GSS service name from conf/openfire.xml
+  <fqdn>. AES enctypes only (RC4 is deprecated with modern AD + JDK 17).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-openfire-kerberos
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+data:
+  krb5.conf: |
+    [libdefaults]
+      default_realm = {{ .Values.kerberos.realm }}
+      dns_lookup_kdc = false
+      dns_lookup_realm = false
+      permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+      default_tkt_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+      default_tgs_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+
+    [realms]
+      {{ .Values.kerberos.realm }} = {
+        kdc = {{ .Values.kerberos.kdc }}
+        admin_server = {{ .Values.kerberos.adminServer | default .Values.kerberos.kdc }}
+      }
+
+  gss.conf: |
+    com.sun.security.jgss.accept {
+        com.sun.security.auth.module.Krb5LoginModule required
+        storeKey=true
+        useKeyTab=true
+        doNotPrompt=true
+        keyTab="/opt/openfire/kerberos/openfire.keytab"
+        realm="{{ .Values.kerberos.realm }}"
+        principal="{{ include "openfire.krbPrincipal" . }}"
+        isInitiator=false
+        debug=false;
+    };
+{{- end }}

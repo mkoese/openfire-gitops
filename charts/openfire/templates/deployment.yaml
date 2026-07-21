@@ -1,0 +1,287 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-openfire
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  # Fixed to 1: Openfire does not cluster without the Hazelcast plugin and a
+  # shared external database, and the PVCs are ReadWriteOnce.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "openfire.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openfire.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-openfire
+      # Spread openfire across nodes: the scheduler always tries a node
+      # without a running openfire first. One rule covers both cases -- other
+      # environments (namespaceSelector {} = all namespaces; envs live in
+      # separate namespaces) AND replicas of this deployment, which carry the
+      # same app label. Use a distinct release name per environment so the
+      # instance label stays meaningful cluster-wide (see README).
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: openfire
+                namespaceSelector: {}
+                topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-conf
+          image: "{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            limits:
+              # 2 cores: each trusted-CA import spawns a keytool JVM; a large
+              # CA bundle (~130 certs) at 500m would take minutes on first boot.
+              cpu: "2"
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          env:
+            - name: KEYSTORE_PASS
+              {{- if .Values.tls.keystorePasswordSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tls.keystorePasswordSecret }}
+                  key: keystore-password
+              {{- else }}
+              value: changeit
+              {{- end }}
+            {{- if .Values.database.existingSecret }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: password
+            {{- end }}
+            {{- if and .Values.auth.enabled .Values.auth.ldap.existingSecret }}
+            - name: LDAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.ldap.existingSecret }}
+                  key: password
+            {{- end }}
+            {{- if .Values.adminPasswordSecret }}
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.adminPasswordSecret }}
+                  key: password
+            {{- end }}
+          command: ["sh", "/scripts/init.sh"]
+          volumeMounts:
+            - name: openfire-init-script
+              mountPath: /scripts
+              readOnly: true
+            - name: openfire-conf-secret
+              mountPath: /conf-secret
+              readOnly: true
+            - name: openfire-conf
+              mountPath: /conf
+              subPath: conf
+            - name: openfire-plugins
+              mountPath: /plugins
+            {{- if not .Values.database.host }}
+            - name: openfire-data
+              mountPath: /data
+            {{- end }}
+            - name: openfire-security
+              mountPath: /security
+              subPath: security
+            {{- if .Values.tls.secretName }}
+            - name: openfire-tls
+              mountPath: /tls
+              readOnly: true
+            {{- end }}
+            {{- range .Values.tls.extraKeypairs }}
+            - name: extra-keypair-{{ .alias }}
+              mountPath: /extra-keypairs/{{ .alias }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tls.trustedCAConfigMap }}
+            - name: openfire-trusted-ca
+              mountPath: /trusted-ca
+              readOnly: true
+            {{- end }}
+      containers:
+        - name: openfire
+          image: "{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: TZ
+              value: {{ .Values.timezone | default "UTC" | quote }}
+            # Log levels — edit any of these in the OpenShift UI to raise
+            # verbosity (rolls a new pod at that level). See docs/logging.md.
+            - name: OPENFIRE_LOG_LEVEL
+              value: {{ .Values.logging.level | quote }}
+            - name: OPENFIRE_LOG_LEVEL_AUTH
+              value: {{ .Values.logging.auth | quote }}
+            - name: OPENFIRE_LOG_LEVEL_LDAP
+              value: {{ .Values.logging.ldap | quote }}
+            - name: OPENFIRE_LOG_LEVEL_SASL
+              value: {{ .Values.logging.sasl | quote }}
+            {{- if .Values.javaOpts }}
+            - name: JAVA_OPTS
+              value: {{ printf "%s%s" (.Values.javaOpts | join " ") (ternary " -Djava.security.krb5.conf=/opt/openfire/kerberos/krb5.conf" "" .Values.kerberos.enabled) | quote }}
+            {{- end }}
+          ports:
+            - name: xmpp
+              containerPort: 5222
+            - name: xmpp-ssl
+              containerPort: 5223
+            - name: s2s
+              containerPort: 5269
+            - name: s2s-ssl
+              containerPort: 5270
+            - name: component
+              containerPort: 5275
+            - name: component-ssl
+              containerPort: 5276
+            - name: bosh
+              containerPort: 7070
+            - name: bosh-ssl
+              containerPort: 7443
+            - name: filetransfer
+              containerPort: 7777
+            - name: admin
+              containerPort: 9090
+            - name: admin-ssl
+              containerPort: 9091
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            {{- if .Values.security.readOnlyRootFilesystem }}
+            readOnlyRootFilesystem: true
+            {{- end }}
+          # Tight probe intervals: with a single node every restart is client
+          # downtime, so the pod must become Ready as fast as it starts, not
+          # on the next slow probe tick. Startup budget: 2s x 60 = 120s.
+          startupProbe:
+            httpGet:
+              path: /login.jsp
+              port: admin
+            periodSeconds: 2
+            failureThreshold: 60
+          # Liveness is deliberately LAZY (3 min budget): during a reconnect
+          # storm the CPU is saturated for tens of seconds and a slow
+          # /login.jsp must not get the pod killed mid-recovery -- that would
+          # retrigger the exact storm that caused it. Startup/readiness stay
+          # tight; liveness only catches a truly hung JVM.
+          livenessProbe:
+            httpGet:
+              path: /login.jsp
+              port: admin
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            tcpSocket:
+              port: xmpp
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: openfire-conf
+              mountPath: /opt/openfire/conf
+              subPath: conf
+            {{- if not .Values.database.host }}
+            - name: openfire-data
+              mountPath: /opt/openfire/embedded-db
+            {{- end }}
+            - name: openfire-plugins
+              mountPath: /opt/openfire/plugins
+            - name: openfire-security
+              mountPath: /opt/openfire/resources/security
+              subPath: security
+            {{- if .Values.kerberos.enabled }}
+            - name: kerberos
+              mountPath: /opt/openfire/kerberos
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            # writable logs dir so readOnlyRootFilesystem can be enabled
+            # (Openfire routes logs to stdout, but still opens this directory)
+            - name: openfire-logs
+              mountPath: /opt/openfire/logs
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: openfire-init-script
+          configMap:
+            name: {{ .Release.Name }}-openfire-init
+            defaultMode: 0555
+        - name: openfire-conf-secret
+          secret:
+            secretName: {{ .Values.conf.existingSecret | default (printf "%s-openfire-conf" .Release.Name) }}
+        # conf and security share one PVC (subPaths conf/ and security/) --
+        # both hold state that must survive restarts (encryption key, keystore)
+        - name: openfire-conf
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-openfire-conf
+        {{- if not .Values.database.host }}
+        - name: openfire-data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-openfire-data
+        {{- end }}
+        - name: openfire-plugins
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-openfire-plugins
+        - name: openfire-security
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-openfire-conf
+        {{- if .Values.tls.secretName }}
+        - name: openfire-tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- range .Values.tls.extraKeypairs }}
+        - name: extra-keypair-{{ .alias }}
+          secret:
+            secretName: {{ .secretName }}
+        {{- end }}
+        {{- if .Values.kerberos.enabled }}
+        # krb5.conf + gss.conf (ConfigMap) and the keytab (Secret) in one dir.
+        # defaultMode 0440: the keytab is a long-lived credential — keep it
+        # readable only by the pod's UID and GID 0, not world-readable (0644).
+        - name: kerberos
+          projected:
+            defaultMode: 0440
+            sources:
+              - configMap:
+                  name: {{ .Release.Name }}-openfire-kerberos
+              - secret:
+                  name: {{ required "kerberos.keytabSecret is required when kerberos.enabled" .Values.kerberos.keytabSecret }}
+        {{- end }}
+        {{- if .Values.tls.trustedCAConfigMap }}
+        - name: openfire-trusted-ca
+          configMap:
+            name: {{ .Values.tls.trustedCAConfigMap }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: openfire-logs
+          emptyDir: {}

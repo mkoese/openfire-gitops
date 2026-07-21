@@ -1,0 +1,34 @@
+# Size tier: up to ~20k concurrent sessions.
+# heap 3.6Gi (6Gi x 60%) + 1Gi direct (Netty TLS buffers, ~32KB x 20k) +
+# metaspace/stacks headroom; storm 20k TLS ~= 20-40 CPU-s (~10s on 4 cores);
+# logins ~350/s -> pool 75.
+resources:
+  limits:
+    memory: 6Gi
+  requests:
+    cpu: "4"
+    memory: 6Gi
+database:
+  minConnections: 15
+  maxConnections: 75
+javaOpts:
+  - -XX:+UseContainerSupport
+  - -XX:MaxRAMPercentage=60.0
+  - -XX:MaxDirectMemorySize=1g            # 20k connections' TLS buffers
+  - -XX:+UseG1GC
+  - -XX:+ExitOnOutOfMemoryError
+  - -Dlog4j2.formatMsgNoLookups=true
+  - -Djava.security.egd=file:/dev/urandom
+conf:
+  extraXml: |
+    <cache>
+      <username2roster>
+        <size>41943040</size>
+      </username2roster>
+      <userCache>
+        <size>10485760</size>
+      </userCache>
+      <userGroup>
+        <size>10485760</size>
+      </userGroup>
+    </cache>

@@ -1,0 +1,141 @@
+# Openfire GitOps - GitLab CI/CD Pipeline
+#
+# Validates the Helm chart on every push/MR: lint + render across the
+# supported feature combinations (embedded/external DB, AD auth, Kerberos,
+# TLS + extra keypairs, bring-your-own conf secret).
+
+validate-charts:
+  image:
+    name: docker.io/alpine/helm:3.16.3
+    entrypoint: [""]
+  script:
+    - helm lint charts/openfire
+    - helm template test charts/openfire > /dev/null
+    - helm template test charts/openfire
+      --set database.host=pg.example.com
+      --set database.existingSecret=pg-secret
+      --set adminPasswordSecret=openfire-admin > /dev/null
+    - helm template test charts/openfire
+      --set database.host=pg.example.com
+      --set database.existingSecret=pg-secret
+      --set adminPasswordSecret=openfire-admin
+      --set auth.enabled=true
+      --set auth.ldap.existingSecret=ldap-secret
+      --set kerberos.enabled=true
+      --set kerberos.keytabSecret=openfire-keytab
+      --set xmpp.domain=chat.example.com
+      --set xmpp.fqdn=chat.example.com > /dev/null
+    - helm template test charts/openfire
+      --set tls.secretName=tls-cert
+      --set 'tls.extraKeypairs[0].secretName=federation-kp'
+      --set 'tls.extraKeypairs[0].alias=federation'
+      --set tls.trustedCAConfigMap=ca-bundle > /dev/null
+    - helm template test charts/openfire
+      --set conf.existingSecret=my-conf > /dev/null
+    - helm template test charts/openfire
+      -f charts/openfire/values-openshift.yaml > /dev/null
+    - helm template test charts/openfire
+      -f charts/openfire/values-openshift.yaml
+      --set loadBalancer.enabled=true
+      --set 'networkPolicy.clientCIDRs[0]=10.0.0.0/8'
+      --set 'networkPolicy.s2sCIDRs[0]=192.0.2.0/24'
+      --set routes.adminSsl.enabled=true
+      --set routes.boshSsl.enabled=true > /dev/null
+    - helm template dev charts/openfire
+      -f charts/openfire/values-openshift.yaml -f envs/dev.yaml > /dev/null
+    - helm template preprod charts/openfire
+      -f charts/openfire/values-openshift.yaml -f envs/preprod.yaml
+      -f envs/sizes/30k.yaml > /dev/null
+    - |
+      # every size tier must render on prod
+      for t in envs/sizes/*.yaml; do
+        helm template prod charts/openfire \
+          -f charts/openfire/values-openshift.yaml -f envs/prod.yaml \
+          -f "$t" > /dev/null || { echo "tier $t failed"; exit 1; }
+      done
+    - |
+      # Guards must FAIL: dev admin password with production features
+      if helm template test charts/openfire --set auth.enabled=true \
+        --set auth.ldap.existingSecret=ldap-secret > /dev/null 2>&1; then
+        echo "ERROR: adminPassword guard did not trip"; exit 1
+      fi
+      if helm template test charts/openfire --set kerberos.enabled=true \
+        --set kerberos.keytabSecret=kt > /dev/null 2>&1; then
+        echo "ERROR: kerberos-requires-auth guard did not trip"; exit 1
+      fi
+    - echo "All chart variants render OK"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# helm renders broken XML happily; a bad openfire.xml would only crashloop at
+# first boot AFTER poisoning the conf PVC. Parse it here instead.
+validate-conf-xml:
+  image:
+    name: docker.io/python:3.12-alpine
+  script:
+    - apk add --no-cache helm
+    - pip install --no-cache-dir --quiet pyyaml
+    - |
+      python3 - <<'PY'
+      import subprocess, yaml, sys
+      import xml.etree.ElementTree as ET
+      combos = [
+          ("dev", ["-f","envs/dev.yaml"]),
+          ("preprod", ["-f","envs/preprod.yaml","-f","envs/sizes/30k.yaml"]),
+          ("prod", ["-f","envs/prod.yaml","-f","envs/sizes/30k.yaml"]),
+      ]
+      for rel, extra in combos:
+          out = subprocess.run(
+              ["helm","template",rel,"charts/openfire",
+               "-f","charts/openfire/values-openshift.yaml"] + extra,
+              capture_output=True, text=True, check=True).stdout
+          for doc in yaml.safe_load_all(out):
+              if doc and doc.get("kind") == "Secret":
+                  for name, body in (doc.get("stringData") or {}).items():
+                      if name.endswith(".xml"):
+                          ET.fromstring(body)
+                          print(f"{rel}/{name}: XML OK")
+      PY
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Publishes the chart as an OCI artifact to Quay -- the same registry the
+# cluster already pulls the image from, so a rollout needs neither git nor
+# GitLab (docs/upgrading.md "Rollout from the registry"). The environment
+# presets (envs/ incl. sizes/) are bundled into the package: the artifact is
+# self-contained (env files reference secret NAMES, never secret values).
+# Published versions are immutable: an existing version is never overwritten
+# -- bump the version in Chart.yaml to release a new artifact.
+# Required variables (Settings > CI/CD > Variables): QUAY_USERNAME, QUAY_PASSWORD
+publish-chart:
+  needs: [validate-charts, validate-conf-xml]
+  image:
+    name: docker.io/alpine/helm:3.16.3
+    entrypoint: [""]
+  script:
+    - |
+      set -euo pipefail
+      : "${QUAY_USERNAME:?QUAY_USERNAME is not set - add it under Settings > CI/CD > Variables}"
+      : "${QUAY_PASSWORD:?QUAY_PASSWORD is not set - add it under Settings > CI/CD > Variables (masked)}"
+      VERSION=$(sed -n 's/^version: *//p' charts/openfire/Chart.yaml)
+      echo "${QUAY_PASSWORD}" | helm registry login quay.io -u "${QUAY_USERNAME}" --password-stdin
+      # Bundle the environment presets so the artifact is self-contained
+      cp -r envs charts/openfire/envs
+      helm package charts/openfire
+      # Immutability + drift guard: an existing version is never overwritten.
+      # Identical content -> quiet skip (docs-only push). Different content ->
+      # someone changed the chart without bumping the version: FAIL.
+      if helm pull "oci://quay.io/mikailkose/openfire" --version "${VERSION}" --untar --untardir /tmp/published > /dev/null 2>&1; then
+        mkdir -p /tmp/local && tar xzf "openfire-${VERSION}.tgz" -C /tmp/local
+        if diff -r /tmp/published/openfire /tmp/local/openfire; then
+          echo "Chart ${VERSION} already published and identical -- nothing to do."
+          exit 0
+        fi
+        echo "ERROR: chart content changed but version ${VERSION} is already published -- bump version in charts/openfire/Chart.yaml."
+        exit 1
+      fi
+      helm push "openfire-${VERSION}.tgz" oci://quay.io/mikailkose
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

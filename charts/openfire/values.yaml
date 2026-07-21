@@ -1,0 +1,248 @@
+namespace:
+  name: openfire
+  create: true
+
+image:
+  repository: openfire-oci
+  tag: "5.1.1"
+  # Immutable content pin (sha256:...). When set, the digest WINS over the
+  # tag (UBI model: tags roll -- 'main', '5.1.1' point at the newest build;
+  # digests pin). Preprod/prod set this; the oci build job prints the value.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+timezone: Europe/Zurich
+
+# Log levels — rendered as container env vars, so they show up editable in the
+# OpenShift UI (Deployment > Environment). Change one to debug/trace and the
+# deployment rolls a new pod at that level; no image rebuild, no file edit.
+# Values (case-insensitive): off, error, warn, info, debug, trace, all.
+logging:
+  level: info    # root
+  auth: info     # com.mkoese.openfire.auth (AD-gated auth provider)
+  ldap: info     # org.jivesoftware.openfire.ldap
+  sasl: info     # org.jivesoftware.openfire.net (SASL/TLS)
+
+xmpp:
+  # XMPP domain and server FQDN. Empty = in-cluster service FQDN (dev only).
+  # For Kerberos SSO, fqdn MUST match the DNS name clients connect to
+  # (the SPN is xmpp/<fqdn>@REALM).
+  domain: ""
+  fqdn: ""
+
+# Admin account password seeded by autosetup on first boot.
+# PRODUCTION: set adminPasswordSecret to an existing secret with key "password"
+# so the credential is never rendered into a Secret's YAML / helm output / git.
+#   oc create secret generic openfire-admin --from-literal=password=<pw> -n openfire
+# When adminPasswordSecret is set, adminPassword below is ignored.
+# When auth.enabled=true the password MUST satisfy the policy below, otherwise
+# autosetup cannot set it and the account keeps the DB default.
+adminPassword: admin           # dev default only
+adminPasswordSecret: ""        # existing secret, key "password" (recommended)
+
+conf:
+  # Name of an existing secret providing openfire.xml and security.xml.
+  # When set, the chart-managed sample secret is NOT rendered and all
+  # database/auth/sasl templating below is bypassed. Create it with:
+  #   oc create secret generic my-openfire-conf \
+  #     --from-file=openfire.xml=<path-to-openfire.xml> \
+  #     --from-file=security.xml=<path-to-security.xml> -n openfire
+  existingSecret: ""
+  # Raw XML appended inside <jive> of the chart-managed openfire.xml.
+  # Non-reserved properties seed the DB at FIRST setup only (dots = nesting:
+  # cache.userCache.size -> <cache><userCache><size>). Used e.g. for cache
+  # sizing at scale -- see envs/prod.yaml and docs/scaling.md.
+  extraXml: ""
+
+database:
+  # External PostgreSQL. Empty host = embedded HSQLDB (development only).
+  # The JDBC driver is baked into the image via lib.txt (openfire-oci repo).
+  host: ""
+  port: 5432
+  name: openfire
+  user: openfire
+  # Secret with key "password" for the DB user (required when host is set).
+  # Openfire encrypts it inside the persisted openfire.xml on first boot
+  # (security.xml lists database.defaultProvider.* as encrypted properties).
+  existingSecret: ""
+  # JDBC connection pool. The pool absorbs login storms (a mass reconnect
+  # queues its DB lookups here) -- size maxConnections for peak logins/sec,
+  # and keep PostgreSQL max_connections above it.
+  minConnections: 5
+  maxConnections: 25
+
+auth:
+  # AD-gated authentication (openfire-authprovider JAR, baked in via lib.txt):
+  # LDAP existence gate, first password bootstrapped via AD bind, local DB
+  # hashes (SCRAM) authoritative afterwards. When false: Openfire default auth.
+  enabled: false
+  ldap:
+    host: dc1.example.com
+    port: 636
+    sslEnabled: true
+    baseDN: OU=Users,DC=example,DC=com
+    adminDN: CN=svc-openfire,OU=Service,DC=example,DC=com
+    # Secret with key "password" for the LDAP service account (required).
+    existingSecret: ""
+    usernameField: sAMAccountName
+    # AD attributes copied onto the Openfire user (Name/Email in the admin
+    # console, contact name in Spark) at enrollment and refreshed on every
+    # PLAIN/SSO login. nameField also accepts a template: "{givenName} {sn}".
+    nameField: displayName
+    emailField: mail
+    # LDAP filter used when resolving users ({0} = username). The default
+    # excludes DISABLED AD accounts -- without that clause, a user disabled in
+    # AD keeps logging in forever with their locally stored hash (the DB is
+    # authoritative after enrollment). To additionally gate on a group, add a
+    # memberOf clause (the :1.2.840.113556.1.4.1941: OID matches nested groups):
+    #   (&(sAMAccountName={0})(!(userAccountControl:1.2.840.113556.1.4.803:=2))(memberOf:1.2.840.113556.1.4.1941:=CN=chat-users,OU=Groups,DC=example,DC=com))
+    searchFilter: "(&(sAMAccountName={0})(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+  # Users bypassing the AD gate (local admin console fallback)
+  localOnlyUsers: admin
+  # On local hash mismatch, retry AD bind and re-sync the local hash.
+  # Default false: the DB password stays authoritative after enrollment.
+  reenrollOnBindSuccess: false
+  # Policy for locally chosen passwords (AD-verified enrollment is exempt)
+  password:
+    minLength: 12
+    minClasses: 3
+    rejectUsername: true
+
+kerberos:
+  # GSSAPI/Kerberos SSO against Active Directory (requires auth.enabled).
+  # Adds GSSAPI to the offered SASL mechanisms.
+  enabled: false
+  realm: EXAMPLE.COM
+  kdc: dc1.example.com
+  # Defaults to kdc
+  adminServer: ""
+  # Secret with key "openfire.keytab" for SPN xmpp/<fqdn>@<realm>. Create the
+  # keytab on AD with ktpass (see README), then:
+  #   oc create secret generic openfire-keytab \
+  #     --from-file=openfire.keytab=<path> -n openfire
+  keytabSecret: ""
+  # Defaults to xmpp/<fqdn>@<realm>
+  principal: ""
+
+service:
+  type: ClusterIP
+  ports:
+    xmpp: 5222
+    xmppSsl: 5223
+    s2s: 5269
+    s2sSsl: 5270
+    component: 5275
+    componentSsl: 5276
+    bosh: 7070
+    boshSsl: 7443
+    fileTransfer: 7777
+    admin: 9090
+    adminSsl: 9091
+
+loadBalancer:
+  enabled: false
+  # annotations: {}  # cloud provider annotations
+
+networkPolicy:
+  # External ingress to the XMPP client ports (5222/5223). Only relevant when
+  # traffic reaches the pod from outside the namespace (loadBalancer.enabled;
+  # the LB service uses externalTrafficPolicy: Local so the REAL client IP is
+  # what these CIDRs match). Empty list + loadBalancer.enabled=true ->
+  # 0.0.0.0/0 minus internalCIDRs (an enabled LB that drops all its traffic
+  # is a misconfiguration, not security).
+  # PRODUCTION: scope to your client networks. The CIDRs MUST NOT overlap the
+  # cluster's pod/machine networks -- e.g. 10.0.0.0/8 would swallow
+  # OpenShift's default pod network 10.128.0.0/14 and open the XMPP ports to
+  # every pod in the cluster.
+  clientCIDRs: []
+  # Cluster-internal networks excluded from the 0.0.0.0/0 default above.
+  # Set to YOUR cluster's pod + machine networks:
+  #   oc get network.config/cluster -o jsonpath='{.spec.clusterNetwork}'
+  internalCIDRs:
+    - 10.128.0.0/14
+  # Inbound S2S federation (5269/5270). Explicit opt-in: empty = no inbound
+  # federation (outbound S2S egress stays allowed). Same no-overlap rule as
+  # clientCIDRs.
+  s2sCIDRs: []
+
+routes:
+  admin:
+    enabled: false
+    # host: openfire-admin.apps.example.com
+  adminSsl:
+    enabled: false
+    # host: openfire-admin-ssl.apps.example.com
+  bosh:
+    enabled: false
+    # host: openfire-bosh.apps.example.com
+  boshSsl:
+    enabled: false
+    # host: openfire-bosh-ssl.apps.example.com
+
+persistence:
+  storageClassName: ""
+  # conf holds openfire.xml/security.xml and the TLS key/trust stores.
+  # It MUST persist: after autosetup Openfire writes the generated
+  # encryption key into security.xml -- losing it makes encrypted
+  # properties unreadable. Delete the PVC to re-seed from the conf secret.
+  conf:
+    size: 128Mi
+  # data is only created for the embedded database (database.host empty)
+  data:
+    size: 1Gi
+  plugins:
+    size: 512Mi
+
+# JVM flags — overrides Containerfile JAVA_OPTS.
+# Heap is capped at 60% (NOT higher): Netty holds TLS buffers in DIRECT
+# (native) memory, which the cgroup counts against the same container limit.
+# MaxDirectMemorySize otherwise defaults to the heap size — heap + direct
+# could then exceed the limit and the kernel OOM-kills the pod with no Java
+# diagnostics (ExitOnOutOfMemoryError only catches HEAP OOM). The 20k/30k
+# size tiers override this list with a larger direct cap.
+javaOpts:
+  - -XX:+UseContainerSupport              # respect cgroup memory/CPU limits
+  - -XX:MaxRAMPercentage=60.0             # heap; rest is direct/metaspace/stacks
+  - -XX:MaxDirectMemorySize=512m          # Netty TLS buffers (scale with connections)
+  - -XX:+UseG1GC                          # low-latency garbage collector
+  - -XX:+ExitOnOutOfMemoryError           # crash fast instead of running degraded
+  - -Dlog4j2.formatMsgNoLookups=true      # CVE-2021-44228 (Log4Shell) mitigation
+  - -Djava.security.egd=file:/dev/urandom # non-blocking entropy for faster TLS handshakes
+
+tls:
+  # Secret containing key "keystore-password". If empty, the Java default
+  # (changeit) is used. Create it with:
+  #   oc create secret generic openfire-keystore-password \
+  #     --from-literal=keystore-password=<your-password> -n openfire
+  # The chart wires the password into Openfire automatically (keypass/
+  # trustpass in the templated openfire.xml, kept in sync on every start) --
+  # only bring-your-own conf (conf.existingSecret) must set them itself.
+  keystorePasswordSecret: ""
+  # Kubernetes TLS secret (tls.crt, tls.key) from an official CA.
+  # When empty, init container generates a self-signed certificate.
+  secretName: ""
+  # Additional private/public keypairs imported into the application JKS.
+  # Each secret must contain tls.crt and tls.key (PEM). Re-imported on every
+  # start, so rotated secrets are picked up on pod restart.
+  #   extraKeypairs:
+  #     - secretName: xmpp-federation-keypair
+  #       alias: federation
+  extraKeypairs: []
+  # ConfigMap with trusted CA certificates (e.g., config-trusted-cabundle).
+  # Each key with a .crt or .pem extension is imported into the truststore.
+  trustedCAConfigMap: ""
+
+security:
+  # Extra hardening on top of the always-on baseline (runAsNonRoot,
+  # seccompProfile RuntimeDefault, drop ALL caps, no privilege escalation,
+  # no service-account token). readOnlyRootFilesystem is opt-in: all writes go
+  # to mounted volumes (conf/data/plugins/security PVCs, /tmp, /opt/openfire/logs
+  # emptyDirs), so it is compatible — enable it after verifying in your cluster.
+  readOnlyRootFilesystem: false
+
+resources:
+  limits:
+    memory: 768Mi
+  requests:
+    cpu: 250m
+    memory: 512Mi

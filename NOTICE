@@ -1,0 +1,7 @@
+Openfire GitOps
+Copyright 2026 Mikail Koese
+
+Deployment assets (Helm chart) for the Openfire
+XMPP server. Openfire is a product of the Ignite Realtime Foundation,
+licensed under the Apache License, Version 2.0
+(https://github.com/igniterealtime/Openfire).

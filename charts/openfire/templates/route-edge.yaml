@@ -1,0 +1,43 @@
+{{- if .Values.routes.admin.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Release.Name }}-openfire-admin
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.routes.admin.host }}
+  host: {{ .Values.routes.admin.host }}
+  {{- end }}
+  port:
+    targetPort: admin
+  to:
+    kind: Service
+    name: {{ .Release.Name }}-openfire
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+{{- if .Values.routes.bosh.enabled }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Release.Name }}-openfire-bosh
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.routes.bosh.host }}
+  host: {{ .Values.routes.bosh.host }}
+  {{- end }}
+  port:
+    targetPort: bosh
+  to:
+    kind: Service
+    name: {{ .Release.Name }}-openfire
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

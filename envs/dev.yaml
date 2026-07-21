@@ -1,0 +1,29 @@
+# openfire-dev -- overlay on values-openshift.yaml
+# Deploy: helm template dev charts/openfire \
+#           -f charts/openfire/values-openshift.yaml -f envs/dev.yaml | oc apply -f -
+namespace:
+  name: openfire-dev
+
+xmpp:
+  domain: chat-dev.example.com
+  fqdn: chat-dev.example.com
+
+# Dev runs the defaults: embedded DB, default auth, admin/admin, self-signed
+# TLS -- nothing to create beforehand. Routes come from values-openshift.yaml.
+
+# Dev floats on the newest main build: 'main' is a moving alias the oci CI
+# updates on every non-release build. Refresh with:
+#   oc rollout restart deployment/dev-openfire -n openfire-dev
+# Preprod/prod pin exact tags instead (promotion = copying a tested tag).
+image:
+  tag: main
+  pullPolicy: Always
+
+# 1Gi: at 60% heap (chart javaOpts) a 512Mi limit would leave Openfire a
+# ~300Mi heap -- boot-time OOM territory.
+resources:
+  limits:
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 1Gi

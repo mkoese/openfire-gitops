@@ -1,0 +1,54 @@
+# openfire-preprod -- overlay on values-openshift.yaml. Production-like:
+# external PostgreSQL, AD auth, real secrets. Create the secrets in the
+# openfire-preprod namespace first (each environment has its own).
+# Use the SAME size tier as prod -- load tests are only representative if the
+# capacity matches.
+# Deploy: helm template preprod charts/openfire \
+#           -f charts/openfire/values-openshift.yaml \
+#           -f envs/preprod.yaml -f envs/sizes/30k.yaml | oc apply -f -
+namespace:
+  name: openfire-preprod
+
+# Pinned image -- the tag promoted from dev; prod gets this exact tag after soak.
+image:
+  tag: "5.1.1"   # informational -- the digest below is what deploys
+  digest: sha256:3f02cf00e5ac4c1f715122e464f3f30cc9654109f87ad9f86733125f1b389c20
+
+xmpp:
+  domain: chat-preprod.example.com
+  fqdn: chat-preprod.example.com
+
+# oc create secret generic openfire-admin --from-literal=password=<pw> -n openfire-preprod
+adminPasswordSecret: openfire-admin
+
+database:
+  host: postgres.db-preprod.svc.cluster.local
+  # oc create secret generic openfire-db --from-literal=password=<pw> -n openfire-preprod
+  existingSecret: openfire-db
+  # connection pool comes from the size tier (envs/sizes/)
+
+auth:
+  enabled: true
+  ldap:
+    host: dc1.example.com
+    baseDN: OU=Users,DC=example,DC=com
+    adminDN: CN=svc-openfire,OU=Service,DC=example,DC=com
+    # oc create secret generic openfire-ldap --from-literal=password=<pw> -n openfire-preprod
+    existingSecret: openfire-ldap
+
+routes:
+  # mirrors prod: passthrough only, no cleartext edge hop
+  admin:
+    enabled: false
+  bosh:
+    enabled: false
+  adminSsl:
+    enabled: true
+  boshSsl:
+    enabled: true
+
+tls:
+  # cert for chat-preprod.example.com (see docs/tls.md), created in this namespace
+  secretName: openfire-tls
+
+# resources + caches come from the size tier (envs/sizes/) -- no sizing here.

@@ -1,0 +1,25 @@
+# Size tier: up to ~10k concurrent sessions.
+# heap 2.4Gi (4Gi x 60%) + 512m direct cap (chart default javaOpts);
+# storm 10k TLS ~= 10-20 CPU-s; logins ~170/s -> pool 50.
+resources:
+  limits:
+    memory: 4Gi
+  requests:
+    cpu: "2"
+    memory: 4Gi
+database:
+  minConnections: 10
+  maxConnections: 50
+conf:
+  extraXml: |
+    <cache>
+      <username2roster>
+        <size>20971520</size>
+      </username2roster>
+      <userCache>
+        <size>5242880</size>
+      </userCache>
+      <userGroup>
+        <size>5242880</size>
+      </userGroup>
+    </cache>

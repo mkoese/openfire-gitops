@@ -1,0 +1,56 @@
+# Holds conf/ (openfire.xml, security.xml with the generated encryption key)
+# and security/ (TLS key/trust stores). Seeded once by the init container;
+# delete this PVC to re-seed from the conf secret.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-openfire-conf
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClassName }}
+  storageClassName: {{ .Values.persistence.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.conf.size }}
+{{- if not .Values.database.host }}
+---
+# Embedded database storage (development only; skipped with external PostgreSQL)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-openfire-data
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClassName }}
+  storageClassName: {{ .Values.persistence.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.data.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-openfire-plugins
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClassName }}
+  storageClassName: {{ .Values.persistence.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.plugins.size }}

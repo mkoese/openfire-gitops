@@ -1,0 +1,75 @@
+# openfire (production) -- overlay on values-openshift.yaml.
+# Same shape as preprod plus external exposure and full hardening.
+# Every secret below lives in the openfire-prod namespace.
+# Capacity comes from a size tier (envs/sizes/) -- pick the tier at or above
+# your expected CONCURRENT sessions; see docs/scaling.md for the math.
+# Deploy: helm template prod charts/openfire \
+#           -f charts/openfire/values-openshift.yaml \
+#           -f envs/prod.yaml -f envs/sizes/30k.yaml | oc apply -f -
+namespace:
+  name: openfire-prod
+
+# Pinned image -- promotion = copying the exact tag soaked in preprod.
+# Never a moving tag (main/latest) here.
+image:
+  tag: "5.1.1"   # informational -- the digest below is what deploys
+  digest: sha256:3f02cf00e5ac4c1f715122e464f3f30cc9654109f87ad9f86733125f1b389c20
+
+xmpp:
+  domain: chat.example.com
+  fqdn: chat.example.com
+
+adminPasswordSecret: openfire-admin
+
+database:
+  host: postgres.db-prod.svc.cluster.local
+  existingSecret: openfire-db
+  # connection pool comes from the size tier (envs/sizes/)
+
+auth:
+  enabled: true
+  ldap:
+    host: dc1.example.com
+    baseDN: OU=Users,DC=example,DC=com
+    adminDN: CN=svc-openfire,OU=Service,DC=example,DC=com
+    existingSecret: openfire-ldap
+
+# Kerberos SSO: enable after the SPN/keytab for xmpp/chat.example.com exists
+# (each environment needs its own SPN for its own fqdn -- see README).
+# kerberos:
+#   enabled: true
+#   realm: EXAMPLE.COM
+#   kdc: dc1.example.com
+#   keytabSecret: openfire-keytab
+
+# External XMPP clients through the LoadBalancer (externalTrafficPolicy:
+# Local -- the NetworkPolicy sees real client IPs).
+loadBalancer:
+  enabled: true
+networkPolicy:
+  # Scope to your client networks. MUST NOT overlap the cluster's pod/machine
+  # networks (e.g. 10.0.0.0/8 would swallow OpenShift's 10.128.0.0/14 and
+  # open XMPP to every pod). Empty = 0.0.0.0/0 minus internalCIDRs.
+  clientCIDRs: []
+  # inbound federation stays closed unless s2sCIDRs is set
+
+routes:
+  # Edge routes (cleartext router->pod hop) OFF in prod -- passthrough only,
+  # TLS end-to-end to the pod.
+  admin:
+    enabled: false
+  bosh:
+    enabled: false
+  adminSsl:
+    enabled: true
+  boshSsl:
+    enabled: true
+
+tls:
+  secretName: openfire-tls
+  keystorePasswordSecret: openfire-keystore-password
+
+security:
+  readOnlyRootFilesystem: true
+
+# resources + caches come from the size tier (envs/sizes/) -- no sizing here.

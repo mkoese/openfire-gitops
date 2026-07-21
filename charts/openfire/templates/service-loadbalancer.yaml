@@ -1,0 +1,53 @@
+{{- if .Values.loadBalancer.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-openfire-xmpp
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+  {{- if .Values.loadBalancer.annotations }}
+  annotations:
+    {{- toYaml .Values.loadBalancer.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  # Local preserves the REAL client source IP -- without it traffic is SNAT'd
+  # to node IPs and the NetworkPolicy clientCIDRs/s2sCIDRs allowlists match
+  # the wrong addresses (either dropping everything or scoping nothing).
+  # Consequence: the LB health-checks nodes and only routes to the node
+  # running the pod (fine with replicas: 1).
+  externalTrafficPolicy: Local
+  selector:
+    {{- include "openfire.selectorLabels" . | nindent 4 }}
+  # targetPort is the fixed container port; only the service port is configurable
+  ports:
+    - name: xmpp
+      port: {{ .Values.service.ports.xmpp }}
+      targetPort: 5222
+      protocol: TCP
+    - name: xmpp-ssl
+      port: {{ .Values.service.ports.xmppSsl }}
+      targetPort: 5223
+      protocol: TCP
+    - name: s2s
+      port: {{ .Values.service.ports.s2s }}
+      targetPort: 5269
+      protocol: TCP
+    - name: s2s-ssl
+      port: {{ .Values.service.ports.s2sSsl }}
+      targetPort: 5270
+      protocol: TCP
+    - name: component
+      port: {{ .Values.service.ports.component }}
+      targetPort: 5275
+      protocol: TCP
+    - name: component-ssl
+      port: {{ .Values.service.ports.componentSsl }}
+      targetPort: 5276
+      protocol: TCP
+    - name: filetransfer
+      port: {{ .Values.service.ports.fileTransfer }}
+      targetPort: 7777
+      protocol: TCP
+{{- end }}

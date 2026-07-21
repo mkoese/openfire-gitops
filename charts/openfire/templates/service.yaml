@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-openfire
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: xmpp
+      port: {{ .Values.service.ports.xmpp }}
+      targetPort: 5222
+    - name: xmpp-ssl
+      port: {{ .Values.service.ports.xmppSsl }}
+      targetPort: 5223
+    - name: s2s
+      port: {{ .Values.service.ports.s2s }}
+      targetPort: 5269
+    - name: s2s-ssl
+      port: {{ .Values.service.ports.s2sSsl }}
+      targetPort: 5270
+    - name: component
+      port: {{ .Values.service.ports.component }}
+      targetPort: 5275
+    - name: component-ssl
+      port: {{ .Values.service.ports.componentSsl }}
+      targetPort: 5276
+    - name: bosh
+      port: {{ .Values.service.ports.bosh }}
+      targetPort: 7070
+    - name: bosh-ssl
+      port: {{ .Values.service.ports.boshSsl }}
+      targetPort: 7443
+    - name: filetransfer
+      port: {{ .Values.service.ports.fileTransfer }}
+      targetPort: 7777
+    - name: admin
+      port: {{ .Values.service.ports.admin }}
+      targetPort: 9090
+    - name: admin-ssl
+      port: {{ .Values.service.ports.adminSsl }}
+      targetPort: 9091
+  selector:
+    {{- include "openfire.selectorLabels" . | nindent 4 }}

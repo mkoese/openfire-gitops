@@ -1,0 +1,195 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-openfire-init
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "openfire.labels" . | nindent 4 }}
+data:
+  init.sh: |
+    #!/bin/sh
+    set -e
+
+    SERVICE_HOST="{{ include "openfire.fqdn" . }}"
+
+    # Escape a value for use as XML text content, then for the sed RHS.
+    xml_escape() {
+      printf '%s' "$1" | sed -e 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+    }
+    sed_escape() {
+      printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'
+    }
+    inject() { # inject <placeholder> <value> into /conf/openfire.xml
+      sed -i "s|$1|$(sed_escape "$(xml_escape "$2")")|g" /conf/openfire.xml
+    }
+
+    # Mirror plugins from the image into the writable volume. The whole tree,
+    # not just JARs: the admin console ships as an exploded plugins/admin/
+    # directory and the PVC mount hides the image's copy. Mirror = the image
+    # is the source of truth INCLUDING deletions: the admin dir is replaced
+    # wholesale, jars absent from the image are pruned, and -p preserves
+    # mtimes so unchanged jars are not re-exploded on every start.
+    rm -rf /plugins/lost+found{{ if not .Values.database.host }} /data/lost+found{{ end }}
+    rm -rf /plugins/admin
+    for f in /plugins/*.jar; do
+      [ -e "$f" ] || continue
+      [ -e "/opt/openfire/plugins/$(basename "$f")" ] || { echo "Plugins: pruning $(basename "$f") (removed from image)"; rm -f "$f"; }
+    done
+    cp -rfp /opt/openfire/plugins/. /plugins/
+
+    # Seed conf on FIRST BOOT ONLY. Conf is persisted -- overwriting it on
+    # every start would re-run autosetup and discard the encryption key that
+    # Openfire generates into security.xml. Delete the conf PVC to re-seed.
+    if [ ! -f /conf/openfire.xml ]; then
+      cp -r /opt/openfire/conf/* /conf/
+      cp /conf-secret/* /conf/
+      {{- if .Values.database.existingSecret }}
+      inject "@@DB_PASSWORD@@" "${DB_PASSWORD}"
+      echo "Conf: injected database password from secret"
+      {{- end }}
+      {{- if and .Values.auth.enabled .Values.auth.ldap.existingSecret }}
+      inject "@@LDAP_PASSWORD@@" "${LDAP_PASSWORD}"
+      echo "Conf: injected LDAP service account password from secret"
+      {{- end }}
+      {{- if .Values.adminPasswordSecret }}
+      inject "@@ADMIN_PASSWORD@@" "${ADMIN_PASSWORD}"
+      echo "Conf: injected admin password from secret"
+      {{- end }}
+      {{- if .Values.tls.keystorePasswordSecret }}
+      inject "@@KEYSTORE_PASS@@" "${KEYSTORE_PASS}"
+      echo "Conf: injected keystore password from secret"
+      {{- end }}
+      echo "Conf: seeded from image defaults and conf secret"
+    else
+      echo "Conf: already initialized, skipping seed"
+    fi
+    {{- if .Values.tls.keystorePasswordSecret }}
+
+    # Keep Openfire's keypass/trustpass in sync with the secret on EVERY start
+    # (the stores below are rebuilt/self-healed with KEYSTORE_PASS; a rotated
+    # secret would otherwise leave a stale password in the persisted conf).
+    # Openfire re-encrypts the plaintext value on next boot.
+    if grep -q '<keypass' /conf/openfire.xml 2>/dev/null; then
+      sed -i "s|<keypass[^>]*>[^<]*</keypass>|<keypass>$(sed_escape "$(xml_escape "${KEYSTORE_PASS}")")</keypass>|" /conf/openfire.xml
+      sed -i "s|<trustpass[^>]*>[^<]*</trustpass>|<trustpass>$(sed_escape "$(xml_escape "${KEYSTORE_PASS}")")</trustpass>|" /conf/openfire.xml
+      echo "Conf: keystore password synced into openfire.xml"
+    fi
+    {{- end }}
+
+    # Seed truststores. The stock keystore is excluded: the keystore is
+    # generated/imported below so its password always matches KEYSTORE_PASS.
+    for f in /opt/openfire/resources/security/*; do
+      [ -e "$f" ] || continue
+      case "$(basename "$f")" in keystore) continue ;; esac
+      cp -rn "$f" /security/
+    done
+
+    {{- if .Values.tls.secretName }}
+    # Import TLS certificate from Kubernetes secret. The keystore is rebuilt
+    # from scratch on every start so renewed certificates are picked up.
+    openssl pkcs12 -export \
+      -in /tls/tls.crt -inkey /tls/tls.key \
+      -out /tmp/tls.p12 -name "${SERVICE_HOST}" \
+      -passout "pass:${KEYSTORE_PASS}"
+    rm -f /tmp/keystore
+    keytool -importkeystore \
+      -srckeystore /tmp/tls.p12 -srcstoretype PKCS12 -srcstorepass "${KEYSTORE_PASS}" \
+      -destkeystore /tmp/keystore -deststorepass "${KEYSTORE_PASS}" -destkeypass "${KEYSTORE_PASS}" \
+      -noprompt 2>/dev/null
+    mv -f /tmp/keystore /security/keystore
+    rm -f /tmp/tls.p12
+    echo "Keystore: imported TLS certificate from secret"
+
+    {{- else }}
+    # Generate self-signed cert on first boot (FIPS-safe, bypasses SHA1PRNG).
+    # The keystore only ever exists if this script created it, so its
+    # password is known to match KEYSTORE_PASS -- unless the password secret
+    # was rotated. The self-signed keystore is reproducible: regenerate.
+    if [ -f /security/keystore ] && ! keytool -list -keystore /security/keystore -storepass "${KEYSTORE_PASS}" >/dev/null 2>&1; then
+      echo "Keystore: cannot open with current password (rotated?) -- regenerating self-signed certificate"
+      rm -f /security/keystore
+    fi
+    if [ ! -f /security/keystore ]; then
+      keytool -genkeypair \
+        -alias "${SERVICE_HOST}" \
+        -keyalg RSA -keysize 2048 -sigalg SHA256withRSA \
+        -validity 1825 \
+        -dname "CN=${SERVICE_HOST}, O=Openfire" \
+        -ext "san=dns:${SERVICE_HOST},dns:localhost" \
+        -keystore /security/keystore \
+        -storepass "${KEYSTORE_PASS}" -keypass "${KEYSTORE_PASS}" 2>/dev/null
+      echo "Keystore: generated self-signed certificate for ${SERVICE_HOST}"
+    else
+      echo "Keystore: certificate already exists, skipping"
+    fi
+
+    {{- end }}
+    {{- range .Values.tls.extraKeypairs }}
+    # Extra keypair '{{ .alias }}' from secret '{{ .secretName }}'.
+    # Re-imported on every start (delete + import) to pick up rotations.
+    openssl pkcs12 -export \
+      -in "/extra-keypairs/{{ .alias }}/tls.crt" -inkey "/extra-keypairs/{{ .alias }}/tls.key" \
+      -out "/tmp/extra-{{ .alias }}.p12" -name "{{ .alias }}" \
+      -passout "pass:${KEYSTORE_PASS}"
+    keytool -delete -alias "{{ .alias }}" \
+      -keystore /security/keystore -storepass "${KEYSTORE_PASS}" 2>/dev/null || true
+    keytool -importkeystore \
+      -srckeystore "/tmp/extra-{{ .alias }}.p12" -srcstoretype PKCS12 -srcstorepass "${KEYSTORE_PASS}" \
+      -destkeystore /security/keystore -deststorepass "${KEYSTORE_PASS}" -destkeypass "${KEYSTORE_PASS}" \
+      -noprompt 2>/dev/null
+    rm -f "/tmp/extra-{{ .alias }}.p12"
+    echo "Keystore: imported extra keypair '{{ .alias }}'"
+
+    {{- end }}
+    {{- if .Values.tls.trustedCAConfigMap }}
+    # The stock truststore ships with password "changeit" -- align it with
+    # KEYSTORE_PASS so the CA import below works with a custom password.
+    if [ -f /security/truststore ] && ! keytool -list -keystore /security/truststore -storepass "${KEYSTORE_PASS}" >/dev/null 2>&1; then
+      if keytool -storepasswd -keystore /security/truststore -storepass changeit -new "${KEYSTORE_PASS}" 2>/dev/null; then
+        echo "Truststore: store password aligned with keystore password"
+      else
+        # Password was rotated: the old one is unknown. Rebuild from image
+        # stock instead of crashlooping -- but keep the old store as .bak:
+        # only declarative CAs (trustedCAConfigMap) are re-imported below;
+        # CAs imported manually (console/keytool) live ONLY in the backup.
+        echo "Truststore: unknown store password (rotated?) -- rebuilding from image stock (old store kept as truststore.bak)"
+        mv -f /security/truststore /security/truststore.bak
+        cp -f /opt/openfire/resources/security/truststore /security/truststore
+        keytool -storepasswd -keystore /security/truststore -storepass changeit -new "${KEYSTORE_PASS}"
+      fi
+    fi
+
+    # Import trusted CA certificates (skip duplicates)
+    keytool -list -rfc -keystore /security/truststore -storepass "${KEYSTORE_PASS}" 2>/dev/null > /tmp/existing.pem || true
+    imported=0 skipped=0
+
+    for src in /trusted-ca/*.crt /trusted-ca/*.pem; do
+      [ -f "$src" ] || continue
+      total=$(grep -c "BEGIN CERTIFICATE" "$src")
+      echo "Processing ${total} certificates from $(basename "$src")"
+
+      awk '/-----BEGIN CERTIFICATE-----/{f="/tmp/ca-"(++n)".pem"} f{print > f} /-----END CERTIFICATE-----/{f=""}' "$src"
+      for part in /tmp/ca-*.pem; do
+        [ -f "$part" ] || continue
+        sig=$(sed -n '2p' "$part")
+
+        if grep -qF "$sig" /tmp/existing.pem; then
+          skipped=$((skipped + 1))
+        else
+          info=$(keytool -printcert -file "$part" 2>/dev/null)
+          owner=$(echo "$info" | grep "Owner:" | head -1 | sed 's/Owner: //')
+          serial=$(echo "$info" | grep "Serial number:" | awk '{print $3}')
+          keytool -importcert -noprompt \
+            -alias "trusted-ca-${imported}" \
+            -file "$part" \
+            -keystore /security/truststore \
+            -storepass "${KEYSTORE_PASS}" 2>/dev/null && echo "  Imported: ${owner} | Serial=${serial}"
+          imported=$((imported + 1))
+        fi
+      done
+      rm -f /tmp/ca-*.pem
+    done
+
+    rm -f /tmp/existing.pem
+    echo "Truststore: ${imported} imported, ${skipped} skipped (already present)"
+    {{- end }}

@@ -1,0 +1,35 @@
+# Size tier: up to ~30k concurrent sessions (100k registered, Path A ceiling
+# tier -- beyond ~50k concurrent, clustering is the answer, see docs/scaling.md).
+# heap 4.8Gi (8Gi x 60%) + 1.5Gi direct (Netty TLS buffers, ~32KB x 30k) +
+# metaspace/stacks headroom; storm 30k TLS ~= 30-60 CPU-s (~15s on 4 cores);
+# logins ~500/s -> pool 100 (PostgreSQL max_connections >= 150).
+resources:
+  limits:
+    memory: 8Gi
+  requests:
+    cpu: "4"
+    memory: 8Gi
+database:
+  minConnections: 25
+  maxConnections: 100
+javaOpts:
+  - -XX:+UseContainerSupport
+  - -XX:MaxRAMPercentage=60.0
+  - -XX:MaxDirectMemorySize=1536m         # 30k connections' TLS buffers
+  - -XX:+UseG1GC
+  - -XX:+ExitOnOutOfMemoryError
+  - -Dlog4j2.formatMsgNoLookups=true
+  - -Djava.security.egd=file:/dev/urandom
+conf:
+  extraXml: |
+    <cache>
+      <username2roster>
+        <size>104857600</size>
+      </username2roster>
+      <userCache>
+        <size>26214400</size>
+      </userCache>
+      <userGroup>
+        <size>26214400</size>
+      </userGroup>
+    </cache>

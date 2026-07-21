@@ -1,0 +1,12 @@
+image:
+  repository: quay.io/mikailkose/openfire-oci
+  tag: "5.1.1"
+  # IfNotPresent + pinned tags: a restart must never depend on the registry
+  # being reachable -- the node's cached image starts immediately.
+  pullPolicy: IfNotPresent
+
+routes:
+  admin:
+    enabled: true
+  bosh:
+    enabled: true
