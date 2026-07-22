@@ -23,6 +23,7 @@ docs/                  # Operational guides
 | [docs/architecture.md](docs/architecture.md) | **Start here** — the 3 repos, AD/Postgres/Kerberos, and the auth flow (with diagrams) |
 | [docs/data-lifecycle.md](docs/data-lifecycle.md) | Where state lives, what's in the database, backup / restore / migrate, what a "new database" costs |
 | [docs/tls.md](docs/tls.md) | Ordering certificates (which names, where route URLs come from), keystores, rotation, cert-manager |
+| [docs/secret-management.md](docs/secret-management.md) | Which secrets to create per env (table + commands) — do this **before** the first deploy |
 | [docs/secret-rotation.md](docs/secret-rotation.md) | Rotating every secret: what is read when, and the runbook per credential |
 | [docs/upgrading.md](docs/upgrading.md) | Bump Openfire / base images across the repos; release & versioning; rollback |
 | [docs/monitoring.md](docs/monitoring.md) | Prometheus (jmx_exporter) & Zabbix; what's scrapeable; health endpoints |
